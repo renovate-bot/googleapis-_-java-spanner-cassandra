@@ -32,6 +32,7 @@ import com.google.api.gax.rpc.ApiCallContext;
 import com.google.common.collect.ImmutableMap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.Unpooled;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
@@ -63,9 +64,9 @@ final class DriverConnectionHandler implements Runnable {
   private final AdapterClientWrapper adapterClientWrapper;
   private final GrpcCallContext defaultContext;
   private final GrpcCallContext defaultContextWithLAR;
-
   private static final Map<String, List<String>> ROUTE_TO_LEADER_HEADER_MAP =
       ImmutableMap.of(ROUTE_TO_LEADER_HEADER_KEY, Collections.singletonList("true"));
+  private static final Map<String, String> EMPTY_ATTACHMENTS = Collections.emptyMap();
 
   /**
    * Constructor for DriverConnectionHandler.
@@ -88,9 +89,7 @@ final class DriverConnectionHandler implements Runnable {
 
     try (BufferedInputStream inputStream = new BufferedInputStream(socket.getInputStream());
         BufferedOutputStream outputStream = new BufferedOutputStream(socket.getOutputStream())) {
-
-      processRequest(inputStream, outputStream);
-
+      processRequestsLoop(inputStream, outputStream);
     } catch (IOException e) {
       LOG.error(
           "Exception handling connection from {}: {}",
@@ -106,12 +105,11 @@ final class DriverConnectionHandler implements Runnable {
     }
   }
 
-  private void processRequest(InputStream inputStream, OutputStream outputStream)
+  private void processRequestsLoop(InputStream inputStream, OutputStream outputStream)
       throws IOException {
     // Keep processing until End-Of-Stream is reached on the input
     while (true) {
-      Optional<byte[]> response; // Using Optional to handle different response scenarios
-
+      Optional<byte[]> response;
       try {
         // 1. Read and construct the payload from the input stream
         byte[] payload = constructPayload(inputStream);
@@ -245,24 +243,20 @@ final class DriverConnectionHandler implements Runnable {
    * @return A {@link PreparePayloadResult} containing the result of the operation.
    */
   private PreparePayloadResult preparePayload(byte[] payload) {
-    // TODO: replace with Unpooled.wrappedBuffer(...) to avoid an extra memory copy.
-    ByteBuf payloadBuf = byteBufAllocator.buffer(payload.length);
-    payloadBuf.writeBytes(payload);
+    ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload);
     Frame frame = serverFrameCodec.decode(payloadBuf);
     payloadBuf.release();
 
-    Map<String, String> attachments = new HashMap();
+    Map<String, String> attachments = new HashMap<>();
     if (frame.message instanceof Execute) {
       return prepareExecuteMessage((Execute) frame.message, attachments);
-    }
-    if (frame.message instanceof Batch) {
+    } else if (frame.message instanceof Batch) {
       return prepareBatchMessage((Batch) frame.message, attachments);
-    }
-    if (frame.message instanceof Query) {
+    } else if (frame.message instanceof Query) {
       return prepareQueryMessage((Query) frame.message, attachments);
+    } else {
+      return new PreparePayloadResult(defaultContext, EMPTY_ATTACHMENTS);
     }
-
-    return new PreparePayloadResult(defaultContext, attachments);
   }
 
   private PreparePayloadResult prepareExecuteMessage(
