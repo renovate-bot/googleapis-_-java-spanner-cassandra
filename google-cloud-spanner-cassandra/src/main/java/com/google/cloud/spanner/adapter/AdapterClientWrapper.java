@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,11 +61,12 @@ final class AdapterClientWrapper {
    * @param payload The byte array payload of the message to send.
    * @param attachments A map of string key-value pairs to be included as attachments in the
    *     request.
-   * @return An {@link Optional} containing the byte array payload of the adapter's response, or
-   *     {@link Optional#empty()} if no response is received.
+   * @param streamId The stream id of the message to send.
+   * @return A byte array payload of the adapter's response.
    */
-  Optional<byte[]> sendGrpcRequest(
-      byte[] payload, Map<String, String> attachments, ApiCallContext context) {
+  byte[] sendGrpcRequest(
+      byte[] payload, Map<String, String> attachments, ApiCallContext context, int streamId) {
+
     AdaptMessageRequest request =
         AdaptMessageRequest.newBuilder()
             .setName(sessionManager.getSession().getName())
@@ -87,11 +87,12 @@ final class AdapterClientWrapper {
     } catch (RuntimeException e) {
       LOG.error("Error executing AdaptMessage request: ", e);
       // Any error in getting the AdaptMessageResponse should be reported back to the client.
-      return Optional.of(serverErrorResponse(e.getMessage()));
+      return serverErrorResponse(streamId, e.getMessage());
     }
 
     if (collectedPayloads.isEmpty()) {
-      return Optional.empty();
+      return serverErrorResponse(
+          streamId, "No response received from the server."); // No response payloads at all.
     }
 
     try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
@@ -103,10 +104,10 @@ final class AdapterClientWrapper {
       for (int i = 0; i < numPayloads - 1; i++) {
         outputStream.write(collectedPayloads.get(i).toByteArray());
       }
-      return Optional.of(outputStream.toByteArray());
+      return outputStream.toByteArray();
     } catch (IOException e) {
       LOG.error("Error stitching chunked payloads: ", e);
-      return Optional.of(serverErrorResponse(e.getMessage()));
+      return serverErrorResponse(streamId, e.getMessage());
     }
   }
 
