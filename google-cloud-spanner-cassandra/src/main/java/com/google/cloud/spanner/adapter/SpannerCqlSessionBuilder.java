@@ -205,7 +205,17 @@ public final class SpannerCqlSessionBuilder
   }
 
   private void createAndStartAdapter() {
-    adapter = new Adapter(host, databaseUri, iNetAddress, port, numGrpcChannels, maxCommitDelay);
+
+    AdapterOptions adapterOptions =
+        new AdapterOptions.Builder()
+            .spannerEndpoint(host)
+            .tcpPort(port)
+            .inetAddress(iNetAddress)
+            .databaseUri(databaseUri)
+            .numGrpcChannels(numGrpcChannels)
+            .build();
+
+    adapter = new Adapter(adapterOptions);
     adapter.start();
   }
 }

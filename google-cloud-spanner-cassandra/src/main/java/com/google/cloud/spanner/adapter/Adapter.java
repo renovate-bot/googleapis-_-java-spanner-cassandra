@@ -24,13 +24,10 @@ import com.google.auth.oauth2.GoogleCredentials;
 import com.google.spanner.adapter.v1.AdapterClient;
 import com.google.spanner.adapter.v1.AdapterSettings;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
-import java.time.Duration;
 import java.util.Collections;
-import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -56,42 +53,19 @@ final class Adapter {
           + CLIENT_VERSION
           + GaxProperties.getLibraryVersion(Adapter.class);
 
-  private final InetAddress inetAddress;
-  private final int port;
-  private final String host;
-  private final String databaseUri;
-  private final int numGrpcChannels;
-  private final Optional<Duration> maxCommitDelay;
   private AdapterClientWrapper adapterClientWrapper;
   private ServerSocket serverSocket;
   private ExecutorService executor;
   private boolean started = false;
+  private AdapterOptions options;
 
   /**
    * Constructor for the Adapter class, specifying a specific address to bind to.
    *
-   * @param databaseUri The URI of the Cloud Spanner database to connect to.
-   * @param inetAddress The specific local {@link InetAddress} for the server socket to bind to.
-   * @param port The local TCP port number that the adapter server should listen on.
-   * @param numGrpcChannels The number of gRPC channels to use for communication with the backend
-   *     Spanner service.
-   * @param maxCommitDelay The max commit delay to set in requests to optimize write throughput.
+   * @param options options for init.
    */
-  Adapter(
-      String host,
-      String databaseUri,
-      InetAddress inetAddress,
-      int port,
-      int numGrpcChannels,
-      Optional<Duration> maxCommitDelay) {
-    // TODO: Encapsulate arguments in an Options class to accomodate future fields without having to
-    // pass them individually.
-    this.host = host;
-    this.databaseUri = databaseUri;
-    this.inetAddress = inetAddress;
-    this.port = port;
-    this.numGrpcChannels = numGrpcChannels;
-    this.maxCommitDelay = maxCommitDelay;
+  Adapter(AdapterOptions options) {
+    this.options = options;
   }
 
   /** Starts the adapter, initializing the local TCP server and handling client connections. */
@@ -109,7 +83,8 @@ final class Adapter {
       channelProviderBuilder
           .setCredentials(credentials)
           .setAllowNonDefaultServiceAccount(true)
-          .setChannelPoolSettings(ChannelPoolSettings.staticallySized(numGrpcChannels));
+          .setChannelPoolSettings(
+              ChannelPoolSettings.staticallySized(options.getNumGrpcChannels()));
 
       if (isEnableDirectPathXdsEnv()) {
         channelProviderBuilder.setAttemptDirectPath(true);
@@ -121,10 +96,13 @@ final class Adapter {
       }
       HeaderProvider headerProvider =
           FixedHeaderProvider.create(
-              RESOURCE_PREFIX_HEADER_KEY, databaseUri, USER_AGENT_KEY, DEFAULT_USER_AGENT);
+              RESOURCE_PREFIX_HEADER_KEY,
+              options.getDatabaseUri(),
+              USER_AGENT_KEY,
+              DEFAULT_USER_AGENT);
       AdapterSettings settings =
           AdapterSettings.newBuilder()
-              .setEndpoint(host)
+              .setEndpoint(options.getSpannerEndpoint())
               .setTransportChannelProvider(channelProviderBuilder.build())
               .setHeaderProvider(headerProvider)
               .build();
@@ -132,7 +110,7 @@ final class Adapter {
       AdapterClient adapterClient = AdapterClient.create(settings);
 
       AttachmentsCache attachmentsCache = new AttachmentsCache(MAX_GLOBAL_STATE_SIZE);
-      SessionManager sessionManager = new SessionManager(adapterClient, databaseUri);
+      SessionManager sessionManager = new SessionManager(adapterClient, options.getDatabaseUri());
 
       // Create initial session to verify database existence
       sessionManager.getSession();
@@ -141,8 +119,10 @@ final class Adapter {
           new AdapterClientWrapper(adapterClient, attachmentsCache, sessionManager);
 
       // Start listening on the specified host and port.
-      serverSocket = new ServerSocket(port, DEFAULT_CONNECTION_BACKLOG, inetAddress);
-      LOG.info("Local TCP server started on {}:{}", inetAddress, port);
+      serverSocket =
+          new ServerSocket(
+              options.getTcpPort(), DEFAULT_CONNECTION_BACKLOG, options.getInetAddress());
+      LOG.info("Local TCP server started on {}:{}", options.getInetAddress(), options.getTcpPort());
 
       executor = Executors.newCachedThreadPool();
 
@@ -150,7 +130,7 @@ final class Adapter {
       executor.execute(this::acceptClientConnections);
 
       started = true;
-      LOG.info("Adapter started for database '{}'.", databaseUri);
+      LOG.info("Adapter started for database '{}'.", options.getDatabaseUri());
 
     } catch (IOException | RuntimeException e) {
       throw new AdapterStartException(e);
@@ -180,7 +160,7 @@ final class Adapter {
         socket.setPerformancePreferences(0, 2, 1);
         // Turn on TCP_NODELAY to optimize for chatty protocol that prefers low latency.
         socket.setTcpNoDelay(true);
-        executor.execute(new DriverConnectionHandler(socket, adapterClientWrapper, maxCommitDelay));
+        executor.execute(new DriverConnectionHandler(socket, adapterClientWrapper, options.maxCommitDelay()));
         LOG.debug("Accepted client connection from: {}", socket.getRemoteSocketAddress());
       }
     } catch (SocketException e) {
