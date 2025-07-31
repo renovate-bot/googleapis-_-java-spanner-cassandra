@@ -25,6 +25,7 @@ import com.datastax.oss.driver.shaded.guava.common.annotations.VisibleForTesting
 import com.datastax.oss.protocol.internal.Compressor;
 import com.datastax.oss.protocol.internal.Frame;
 import com.datastax.oss.protocol.internal.FrameCodec;
+import com.datastax.oss.protocol.internal.ProtocolConstants;
 import com.datastax.oss.protocol.internal.request.Batch;
 import com.datastax.oss.protocol.internal.request.Execute;
 import com.datastax.oss.protocol.internal.request.Query;
@@ -74,6 +75,7 @@ final class DriverConnectionHandler implements Runnable {
       ImmutableMap.of(ROUTE_TO_LEADER_HEADER_KEY, Collections.singletonList("true"));
   private static final GrpcCallContext DEFAULT_CONTEXT_WITH_LAR =
       GrpcCallContext.createDefault().withExtraHeaders(ROUTE_TO_LEADER_HEADER_MAP);
+  private static final byte[] EMPTY_BYTES = new byte[0];
 
   /**
    * Constructor for DriverConnectionHandler.
@@ -127,17 +129,17 @@ final class DriverConnectionHandler implements Runnable {
     while (true) {
       int streamId = defaultStreamId; // Initialize with a default value.
       try {
-        // 1. Read and construct the payload from the input stream
-        byte[] payload = constructPayload(inputStream);
+        // 1. Read and construct the message context from the input stream
+        MessageContext ctx = constructMessageContext(inputStream);
 
         // 2. Check for EOF signaled by an empty payload
-        if (payload.length == 0) {
+        if (ctx.payload.length == 0) {
           break; // Break out of the loop gracefully in case of EOF
         }
 
         // 3. Prepare the payload.
-        PreparePayloadResult prepareResult = preparePayload(payload);
-        streamId = prepareResult.getStreamId();
+        PreparePayloadResult prepareResult = preparePayload(ctx);
+        streamId = ctx.streamId;
 
         // 4. If attachment preparation didn't yield an immediate response, send the gRPC request.
         if (prepareResult.getAttachmentErrorResponse().isPresent()) {
@@ -145,7 +147,10 @@ final class DriverConnectionHandler implements Runnable {
         } else {
           outputStream.write(
               adapterClientWrapper.sendGrpcRequest(
-                  payload, prepareResult.getAttachments(), prepareResult.getContext(), streamId));
+                  ctx.payload,
+                  prepareResult.getAttachments(),
+                  prepareResult.getContext(),
+                  streamId));
           // Now response holds the gRPC result, which might still be empty.
         }
       } catch (RuntimeException e) {
@@ -185,18 +190,39 @@ final class DriverConnectionHandler implements Runnable {
     return totalBytesRead;
   }
 
-  private byte[] constructPayload(InputStream socketInputStream)
+  private static class MessageContext {
+    final int opCode;
+    final short streamId;
+    final byte[] payload;
+
+    MessageContext(int opCode, short streamId, byte[] payload) {
+      this.opCode = opCode;
+      this.streamId = streamId;
+      this.payload = payload;
+    }
+
+    MessageContext() {
+      payload = EMPTY_BYTES;
+      opCode = -1;
+      streamId = -1;
+    }
+  }
+
+  private MessageContext constructMessageContext(InputStream socketInputStream)
       throws IOException, IllegalArgumentException {
     byte[] header = new byte[HEADER_LENGTH];
     int bytesRead = readNBytesJava8(socketInputStream, header, 0, HEADER_LENGTH);
     if (bytesRead == 0) {
-      return new byte[0]; // EOF
+      return new MessageContext(); // EOF
     } else if (bytesRead < HEADER_LENGTH) {
       throw new IllegalArgumentException("Payload is not well formed.");
     }
 
-    // Extract the body length from the header.
+    // Extract the stream id, op code and body length from the header.
+    short streamId = load16BigEndian(header, 2);
+    int opCode = load8Unsigned(header, 4);
     int bodyLength = load32BigEndian(header, 5);
+
     if (bodyLength < 0) {
       throw new IllegalArgumentException("Payload is not well formed.");
     }
@@ -208,11 +234,28 @@ final class DriverConnectionHandler implements Runnable {
       throw new IllegalArgumentException("Payload is not well formed.");
     }
 
-    return payload;
+    return new MessageContext(opCode, streamId, payload);
   }
 
   private int load32BigEndian(byte[] bytes, int offset) {
     return ByteBuffer.wrap(bytes, offset, 4).getInt();
+  }
+
+  private short load16BigEndian(byte[] bytes, int offset) {
+    return (short) (((bytes[offset] & 0xFF) << 8) | ((bytes[offset + 1] & 0xFF)));
+  }
+
+  private int load8Unsigned(byte[] bytes, int offset) {
+    // Directly access the byte and apply the 0xFF mask.
+    // This promotes the byte to an int and ensures the value is treated as unsigned.
+    return bytes[offset] & 0xFF;
+  }
+
+  private Frame decodeFrame(byte[] payload) {
+    ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload);
+    Frame frame = serverFrameCodec.decode(payloadBuf);
+    payloadBuf.release();
+    return frame;
   }
 
   /**
@@ -225,22 +268,22 @@ final class DriverConnectionHandler implements Runnable {
    * query to the attachments map. If a prepared query is not found, it sets an error in the result
    * object.
    *
-   * @param payload The payload to process.
+   * @param MessageContext The context contains the stream id, op code and payload to process.
    * @return A {@link PreparePayloadResult} containing the result of the operation.
    */
-  private PreparePayloadResult preparePayload(byte[] payload) {
-    ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload);
-    Frame frame = serverFrameCodec.decode(payloadBuf);
-    payloadBuf.release();
-
-    if (frame.message instanceof Execute) {
-      return prepareExecuteMessage((Execute) frame.message, frame.streamId);
-    } else if (frame.message instanceof Batch) {
-      return prepareBatchMessage((Batch) frame.message, frame.streamId);
-    } else if (frame.message instanceof Query) {
-      return prepareQueryMessage((Query) frame.message, frame.streamId);
-    } else {
-      return new PreparePayloadResult(DEFAULT_CONTEXT, frame.streamId);
+  private PreparePayloadResult preparePayload(MessageContext ctx) {
+    switch (ctx.opCode) {
+      case ProtocolConstants.Opcode.EXECUTE:
+        return prepareExecuteMessage(
+            (Execute) decodeFrame(ctx.payload).message, ctx.streamId);
+      case ProtocolConstants.Opcode.BATCH:
+        return prepareBatchMessage(
+            (Batch) decodeFrame(ctx.payload).message, ctx.streamId);
+      case ProtocolConstants.Opcode.QUERY:
+        return prepareQueryMessage(
+            (Query) decodeFrame(ctx.payload).message, ctx.streamId);
+      default:
+        return new PreparePayloadResult(DEFAULT_CONTEXT);
     }
   }
 
@@ -258,7 +301,7 @@ final class DriverConnectionHandler implements Runnable {
     }
     Optional<byte[]> errorResponse =
         prepareAttachmentForQueryId(streamId, attachments, message.queryId);
-    return new PreparePayloadResult(context, streamId, attachments, errorResponse);
+    return new PreparePayloadResult(context, attachments, errorResponse);
   }
 
   private PreparePayloadResult prepareBatchMessage(Batch message, int streamId) {
@@ -278,7 +321,7 @@ final class DriverConnectionHandler implements Runnable {
         delay -> attachments.put(MAX_COMMIT_DELAY_ATTACHMENT_KEY, delay));
     // No error, return with populated attachments.
     return new PreparePayloadResult(
-        DEFAULT_CONTEXT_WITH_LAR, streamId, attachments, attachmentErrorResponse);
+        DEFAULT_CONTEXT_WITH_LAR, attachments, attachmentErrorResponse);
   }
 
   private PreparePayloadResult prepareQueryMessage(Query message, int streamId) {
@@ -293,7 +336,7 @@ final class DriverConnectionHandler implements Runnable {
         attachments.put(MAX_COMMIT_DELAY_ATTACHMENT_KEY, maxCommitDelayMillis.get());
       }
     }
-    return new PreparePayloadResult(context, streamId, attachments);
+    return new PreparePayloadResult(context, attachments);
   }
 
   private Optional<byte[]> prepareAttachmentForQueryId(
