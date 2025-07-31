@@ -32,6 +32,7 @@ import com.datastax.oss.protocol.internal.request.Query;
 import com.google.api.gax.grpc.GrpcCallContext;
 import com.google.api.gax.rpc.ApiCallContext;
 import com.google.common.collect.ImmutableMap;
+import com.google.protobuf.ByteString;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
@@ -41,7 +42,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collections;
@@ -128,6 +128,7 @@ final class DriverConnectionHandler implements Runnable {
     // Keep processing until End-Of-Stream is reached on the input
     while (true) {
       int streamId = defaultStreamId; // Initialize with a default value.
+      ByteString response;
       try {
         // 1. Read and construct the message context from the input stream
         MessageContext ctx = constructMessageContext(inputStream);
@@ -141,27 +142,28 @@ final class DriverConnectionHandler implements Runnable {
         PreparePayloadResult prepareResult = preparePayload(ctx);
         streamId = ctx.streamId;
 
-        // 4. If attachment preparation didn't yield an immediate response, send the gRPC request.
         if (prepareResult.getAttachmentErrorResponse().isPresent()) {
-          outputStream.write(prepareResult.getAttachmentErrorResponse().get());
+          response = prepareResult.getAttachmentErrorResponse().get();
         } else {
-          outputStream.write(
+          // 4. If attachment preparation didn't yield an immediate response, send the gRPC request.
+          response =
               adapterClientWrapper.sendGrpcRequest(
                   ctx.payload,
                   prepareResult.getAttachments(),
                   prepareResult.getContext(),
-                  streamId));
+                  streamId);
           // Now response holds the gRPC result, which might still be empty.
         }
       } catch (RuntimeException e) {
         // 5. Handle any error during payload construction or attachment processing.
         // Create a server error response to send back to the client.
         LOG.error("Error processing request: ", e);
-        outputStream.write(
+        response =
             serverErrorResponse(
-                streamId, "Server error during request processing: " + e.getMessage()));
+                streamId, "Server error during request processing: " + e.getMessage());
       }
 
+      response.writeTo(outputStream);
       outputStream.flush();
     }
   }
@@ -237,8 +239,15 @@ final class DriverConnectionHandler implements Runnable {
     return new MessageContext(opCode, streamId, payload);
   }
 
+  /**
+   * Reads four consecutive bytes from an array, starting at a given offset, and interprets them as
+   * a single 32-bit integer in big-endian byte order.
+   */
   private int load32BigEndian(byte[] bytes, int offset) {
-    return ByteBuffer.wrap(bytes, offset, 4).getInt();
+    return ((bytes[offset] & 0xFF) << 24)
+        | ((bytes[offset + 1] & 0xFF) << 16)
+        | ((bytes[offset + 2] & 0xFF) << 8)
+        | ((bytes[offset + 3] & 0xFF));
   }
 
   private short load16BigEndian(byte[] bytes, int offset) {
@@ -274,14 +283,11 @@ final class DriverConnectionHandler implements Runnable {
   private PreparePayloadResult preparePayload(MessageContext ctx) {
     switch (ctx.opCode) {
       case ProtocolConstants.Opcode.EXECUTE:
-        return prepareExecuteMessage(
-            (Execute) decodeFrame(ctx.payload).message, ctx.streamId);
+        return prepareExecuteMessage((Execute) decodeFrame(ctx.payload).message, ctx.streamId);
       case ProtocolConstants.Opcode.BATCH:
-        return prepareBatchMessage(
-            (Batch) decodeFrame(ctx.payload).message, ctx.streamId);
+        return prepareBatchMessage((Batch) decodeFrame(ctx.payload).message, ctx.streamId);
       case ProtocolConstants.Opcode.QUERY:
-        return prepareQueryMessage(
-            (Query) decodeFrame(ctx.payload).message, ctx.streamId);
+        return prepareQueryMessage((Query) decodeFrame(ctx.payload).message, ctx.streamId);
       default:
         return new PreparePayloadResult(DEFAULT_CONTEXT);
     }
@@ -299,17 +305,17 @@ final class DriverConnectionHandler implements Runnable {
     } else {
       context = DEFAULT_CONTEXT;
     }
-    Optional<byte[]> errorResponse =
+    Optional<ByteString> errorResponse =
         prepareAttachmentForQueryId(streamId, attachments, message.queryId);
     return new PreparePayloadResult(context, attachments, errorResponse);
   }
 
   private PreparePayloadResult prepareBatchMessage(Batch message, int streamId) {
-    Optional<byte[]> attachmentErrorResponse = Optional.empty();
+    Optional<ByteString> attachmentErrorResponse = Optional.empty();
     Map<String, String> attachments = new HashMap<>();
     for (Object obj : message.queriesOrIds) {
       if (obj instanceof byte[]) {
-        Optional<byte[]> errorResponse =
+        Optional<ByteString> errorResponse =
             prepareAttachmentForQueryId(streamId, attachments, (byte[]) obj);
         if (errorResponse.isPresent()) {
           attachmentErrorResponse = errorResponse;
@@ -320,8 +326,7 @@ final class DriverConnectionHandler implements Runnable {
     maxCommitDelayMillis.ifPresent(
         delay -> attachments.put(MAX_COMMIT_DELAY_ATTACHMENT_KEY, delay));
     // No error, return with populated attachments.
-    return new PreparePayloadResult(
-        DEFAULT_CONTEXT_WITH_LAR, attachments, attachmentErrorResponse);
+    return new PreparePayloadResult(DEFAULT_CONTEXT_WITH_LAR, attachments, attachmentErrorResponse);
   }
 
   private PreparePayloadResult prepareQueryMessage(Query message, int streamId) {
@@ -339,7 +344,7 @@ final class DriverConnectionHandler implements Runnable {
     return new PreparePayloadResult(context, attachments);
   }
 
-  private Optional<byte[]> prepareAttachmentForQueryId(
+  private Optional<ByteString> prepareAttachmentForQueryId(
       int streamId, Map<String, String> attachments, byte[] queryId) {
     String key = constructKey(queryId);
     Optional<String> val = adapterClientWrapper.getAttachmentsCache().get(key);
