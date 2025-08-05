@@ -31,6 +31,7 @@ import com.datastax.oss.protocol.internal.request.Execute;
 import com.datastax.oss.protocol.internal.request.Query;
 import com.google.api.gax.grpc.GrpcCallContext;
 import com.google.api.gax.rpc.ApiCallContext;
+import com.google.cloud.spanner.adapter.metrics.BuiltInMetricsRecorder;
 import com.google.common.collect.ImmutableMap;
 import com.google.protobuf.ByteString;
 import io.netty.buffer.ByteBuf;
@@ -44,6 +45,7 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -61,6 +63,7 @@ final class DriverConnectionHandler implements Runnable {
   private static final char WRITE_ACTION_QUERY_ID_PREFIX = 'W';
   private static final String ROUTE_TO_LEADER_HEADER_KEY = "x-goog-spanner-route-to-leader";
   private static final String MAX_COMMIT_DELAY_ATTACHMENT_KEY = "max_commit_delay";
+  private static final String ADAPT_MESSAGE_METHOD = "Adapter.AdaptMessage";
   private static final ByteBufAllocator byteBufAllocator = ByteBufAllocator.DEFAULT;
   private static final FrameCodec<ByteBuf> serverFrameCodec =
       FrameCodec.defaultServer(new ByteBufPrimitiveCodec(byteBufAllocator), Compressor.none());
@@ -68,11 +71,14 @@ final class DriverConnectionHandler implements Runnable {
   private final AdapterClientWrapper adapterClientWrapper;
   private final Optional<String> maxCommitDelayMillis;
   private static final int defaultStreamId = -1;
+  private final BuiltInMetricsRecorder metricsRecorder;
 
   // These contexts are thread-safe and can be reused across all instances.
   private static final GrpcCallContext DEFAULT_CONTEXT = GrpcCallContext.createDefault();
   private static final Map<String, List<String>> ROUTE_TO_LEADER_HEADER_MAP =
       ImmutableMap.of(ROUTE_TO_LEADER_HEADER_KEY, Collections.singletonList("true"));
+  private static final Map<String, String> SUCCESS_METRIC_ATTRIBUTES =
+      ImmutableMap.of("method", ADAPT_MESSAGE_METHOD, "status", "OK");
   private static final GrpcCallContext DEFAULT_CONTEXT_WITH_LAR =
       GrpcCallContext.createDefault().withExtraHeaders(ROUTE_TO_LEADER_HEADER_MAP);
   private static final byte[] EMPTY_BYTES = new byte[0];
@@ -85,9 +91,13 @@ final class DriverConnectionHandler implements Runnable {
    * @param maxCommitDelay The max commit delay to set in requests to optimize write throughput.
    */
   public DriverConnectionHandler(
-      Socket socket, AdapterClientWrapper adapterClientWrapper, Optional<Duration> maxCommitDelay) {
+      Socket socket,
+      AdapterClientWrapper adapterClientWrapper,
+      BuiltInMetricsRecorder metricsRecorder,
+      Optional<Duration> maxCommitDelay) {
     this.socket = socket;
     this.adapterClientWrapper = adapterClientWrapper;
+    this.metricsRecorder = metricsRecorder;
     if (maxCommitDelay.isPresent()) {
       this.maxCommitDelayMillis = Optional.of(String.valueOf(maxCommitDelay.get().toMillis()));
     } else {
@@ -96,8 +106,11 @@ final class DriverConnectionHandler implements Runnable {
   }
 
   @VisibleForTesting
-  public DriverConnectionHandler(Socket socket, AdapterClientWrapper adapterClientWrapper) {
-    this(socket, adapterClientWrapper, Optional.empty());
+  public DriverConnectionHandler(
+      Socket socket,
+      AdapterClientWrapper adapterClientWrapper,
+      BuiltInMetricsRecorder metricsRecorder) {
+    this(socket, adapterClientWrapper, metricsRecorder, Optional.empty());
   }
 
   /** Runs the connection handler, processing incoming TCP data and sending gRPC requests. */
@@ -128,11 +141,13 @@ final class DriverConnectionHandler implements Runnable {
     // Keep processing until End-Of-Stream is reached on the input
     while (true) {
       int streamId = defaultStreamId; // Initialize with a default value.
+      Instant startTime = null;
       ByteString response;
       try {
         // 1. Read and construct the message context from the input stream
         MessageContext ctx = constructMessageContext(inputStream);
 
+        startTime = Instant.now();
         // 2. Check for EOF signaled by an empty payload
         if (ctx.payload.length == 0) {
           break; // Break out of the loop gracefully in case of EOF
@@ -162,10 +177,19 @@ final class DriverConnectionHandler implements Runnable {
             serverErrorResponse(
                 streamId, "Server error during request processing: " + e.getMessage());
       }
-
       response.writeTo(outputStream);
       outputStream.flush();
+      recordMetrics(startTime);
     }
+  }
+
+  private void recordMetrics(Instant startTime) {
+    if (startTime == null) {
+      return;
+    }
+    final long latency = Duration.between(startTime, Instant.now()).toMillis();
+    metricsRecorder.recordOperationCount(1, SUCCESS_METRIC_ATTRIBUTES);
+    metricsRecorder.recordOperationLatency(latency, SUCCESS_METRIC_ATTRIBUTES);
   }
 
   private static int readNBytesJava8(InputStream in, byte[] b, int off, int len)

@@ -36,7 +36,9 @@ import com.datastax.oss.protocol.internal.request.Prepare;
 import com.datastax.oss.protocol.internal.request.Query;
 import com.datastax.oss.protocol.internal.request.query.QueryOptions;
 import com.google.api.gax.rpc.ApiCallContext;
+import com.google.cloud.spanner.adapter.metrics.BuiltInMetricsRecorder;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.protobuf.ByteString;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
@@ -67,9 +69,12 @@ public final class DriverConnectionHandlerTest {
       ArgumentCaptor.forClass(ApiCallContext.class);
   private static final ArgumentCaptor<Map<String, String>> attachmentsCaptor =
       ArgumentCaptor.forClass(Map.class);
+  private final BuiltInMetricsRecorder mockMetricsRecorder = mock(BuiltInMetricsRecorder.class);
   private AdapterClientWrapper mockAdapterClient;
   private Socket mockSocket;
   private ByteArrayOutputStream outputStream;
+  private static final Map<String, String> expectedAttributes =
+      ImmutableMap.of("method", "Adapter.AdaptMessage", "status", "OK");
 
   public DriverConnectionHandlerTest() {}
 
@@ -89,7 +94,8 @@ public final class DriverConnectionHandlerTest {
     when(mockAdapterClient.sendGrpcRequest(any(byte[].class), any(), any(), any(int.class)))
         .thenReturn(grpcResponse);
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
     handler.run();
 
     assertThat(outputStream.toString(StandardCharsets.UTF_8.name())).isEqualTo("gRPC response");
@@ -110,7 +116,10 @@ public final class DriverConnectionHandlerTest {
     // Use a max commit delay of 100 ms.
     DriverConnectionHandler handler =
         new DriverConnectionHandler(
-            mockSocket, mockAdapterClient, Optional.of(Duration.ofMillis(100)));
+            mockSocket,
+            mockAdapterClient,
+            mockMetricsRecorder,
+            Optional.of(Duration.ofMillis(100)));
     handler.run();
 
     assertThat(outputStream.toString(StandardCharsets.UTF_8.name())).isEqualTo("gRPC response");
@@ -131,7 +140,8 @@ public final class DriverConnectionHandlerTest {
     when(mockAdapterClient.sendGrpcRequest(any(byte[].class), any(), any(), any(int.class)))
         .thenReturn(grpcResponse);
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
     handler.run();
 
     assertThat(outputStream.toString(StandardCharsets.UTF_8.name())).isEqualTo("gRPC response");
@@ -153,7 +163,8 @@ public final class DriverConnectionHandlerTest {
     AttachmentsCache.put("pqid/" + new String(queryId, StandardCharsets.UTF_8.name()), "query");
     when(mockAdapterClient.getAttachmentsCache()).thenReturn(AttachmentsCache);
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
     handler.run();
 
     assertThat(outputStream.toString(StandardCharsets.UTF_8.name())).isEqualTo("gRPC response");
@@ -180,7 +191,10 @@ public final class DriverConnectionHandlerTest {
     // Use a max commit delay of 100 ms.
     DriverConnectionHandler handler =
         new DriverConnectionHandler(
-            mockSocket, mockAdapterClient, Optional.of(Duration.ofMillis(100)));
+            mockSocket,
+            mockAdapterClient,
+            mockMetricsRecorder,
+            Optional.of(Duration.ofMillis(100)));
     handler.run();
 
     assertThat(outputStream.toString(StandardCharsets.UTF_8.name())).isEqualTo("gRPC response");
@@ -192,6 +206,7 @@ public final class DriverConnectionHandlerTest {
         .containsExactly("x-goog-spanner-route-to-leader", ImmutableList.of("true"));
     assertThat(attachmentsCaptor.getValue())
         .containsExactly(preparedQueryKey, "query", "max_commit_delay", "100");
+    verify(mockMetricsRecorder).recordOperationCount(1L, expectedAttributes);
   }
 
   @Test
@@ -203,7 +218,8 @@ public final class DriverConnectionHandlerTest {
     AttachmentsCache AttachmentsCache = new AttachmentsCache(1);
     when(mockAdapterClient.getAttachmentsCache()).thenReturn(AttachmentsCache);
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
     handler.run();
 
     assertThat(ByteString.copyFrom(outputStream.toByteArray())).isEqualTo(response);
@@ -223,7 +239,8 @@ public final class DriverConnectionHandlerTest {
     AttachmentsCache.put("pqid/" + new String(queryId, StandardCharsets.UTF_8.name()), "query");
     when(mockAdapterClient.getAttachmentsCache()).thenReturn(AttachmentsCache);
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
     handler.run();
 
     assertThat(outputStream.toString(StandardCharsets.UTF_8.name())).isEqualTo("gRPC response");
@@ -232,6 +249,7 @@ public final class DriverConnectionHandlerTest {
         .sendGrpcRequest(any(), any(), contextCaptor.capture(), any(int.class));
     assertThat(contextCaptor.getValue().getExtraHeaders())
         .containsExactly("x-goog-spanner-route-to-leader", ImmutableList.of("true"));
+    verify(mockMetricsRecorder).recordOperationCount(1L, expectedAttributes);
   }
 
   @Test
@@ -243,7 +261,8 @@ public final class DriverConnectionHandlerTest {
     AttachmentsCache AttachmentsCache = new AttachmentsCache(1);
     when(mockAdapterClient.getAttachmentsCache()).thenReturn(AttachmentsCache);
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
     handler.run();
 
     assertThat(ByteString.copyFrom(outputStream.toByteArray())).isEqualTo(response);
@@ -259,7 +278,8 @@ public final class DriverConnectionHandlerTest {
         serverErrorResponse(
             -1, "Server error during request processing: Payload is not well formed.");
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
     handler.run();
 
     assertThat(ByteString.copyFrom(outputStream.toByteArray())).isEqualTo(expectedResponse);
@@ -274,7 +294,8 @@ public final class DriverConnectionHandlerTest {
         serverErrorResponse(
             -1, "Server error during request processing: Payload is not well formed.");
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
     handler.run();
 
     assertThat(ByteString.copyFrom(outputStream.toByteArray())).isEqualTo(expectedResponse);
@@ -291,7 +312,8 @@ public final class DriverConnectionHandlerTest {
         serverErrorResponse(
             -1, "Server error during request processing: Payload is not well formed.");
 
-    DriverConnectionHandler handler = new DriverConnectionHandler(mockSocket, mockAdapterClient);
+    DriverConnectionHandler handler =
+        new DriverConnectionHandler(mockSocket, mockAdapterClient, mockMetricsRecorder);
 
     handler.run();
 
@@ -326,7 +348,7 @@ public final class DriverConnectionHandlerTest {
   }
 
   private static byte[] encodeMessage(Message msg) {
-    Frame frame = Frame.forRequest(4, STREAM_ID, false, Collections.emptyMap(), msg);
+    Frame frame = Frame.forRequest(4, STREAM_ID, false, ImmutableMap.of(), msg);
     ByteBuf payloadBuf = clientFrameCodec.encode(frame);
     byte[] payload = new byte[payloadBuf.readableBytes()];
     payloadBuf.readBytes(payload);
