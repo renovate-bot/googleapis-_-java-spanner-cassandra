@@ -30,6 +30,7 @@ import com.datastax.oss.protocol.internal.request.Batch;
 import com.datastax.oss.protocol.internal.request.Execute;
 import com.datastax.oss.protocol.internal.request.Query;
 import com.datastax.oss.protocol.internal.response.Error;
+import com.datastax.oss.protocol.internal.response.error.Unprepared;
 import com.google.api.gax.grpc.GrpcCallContext;
 import com.google.api.gax.rpc.ApiCallContext;
 import com.google.cloud.spanner.adapter.metrics.BuiltInMetricsRecorder;
@@ -174,10 +175,15 @@ final class DriverConnectionHandler implements Runnable {
                   prepareResult.getContext(),
                   streamId);
           if (LOG_SERVER_ERRORS) {
-            Frame frame = decodeClientFrame(response.toByteArray());
-            if (frame.message instanceof Error) {
-              Error error = (Error) frame.message;
-              LOG.info("ERROR: code: {}, message: {}", error.code, error.message);
+            try {
+              Frame frame = decodeClientFrame(response.toByteArray());
+              if (frame.message instanceof Error && !(frame.message instanceof Unprepared)) {
+                Error error = (Error) frame.message;
+                LOG.info("ERROR: code: {}, message: {}", error.code, error.message);
+              }
+            } catch (RuntimeException e) {
+              // Do nothing if we are not able to decode the message as the driver will throw error
+              // on its side.
             }
           }
         }
