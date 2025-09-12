@@ -41,7 +41,7 @@ jobs:
     permissions:
       issues: write
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v8
         with:
           script: |
             if ('${{ needs.daily_integration_run_prod.result }}' === 'failure') {
