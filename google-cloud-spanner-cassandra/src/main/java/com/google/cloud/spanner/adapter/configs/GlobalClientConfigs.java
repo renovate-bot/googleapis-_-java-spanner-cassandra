@@ -23,19 +23,31 @@ public class GlobalClientConfigs {
   private final String spannerEndpoint;
   private final Boolean enableBuiltInMetrics;
   private final String healthCheckEndpoint;
+  private final Boolean usePlainText;
 
   public GlobalClientConfigs(
-      String spannerEndpoint, Boolean enableBuiltInMetrics, String healthCheckEndpoint) {
+      String spannerEndpoint,
+      Boolean enableBuiltInMetrics,
+      String healthCheckEndpoint,
+      Boolean usePlainText) {
     this.spannerEndpoint = spannerEndpoint;
     this.enableBuiltInMetrics = enableBuiltInMetrics;
     this.healthCheckEndpoint = healthCheckEndpoint;
+    this.usePlainText = usePlainText;
+  }
+
+  public GlobalClientConfigs(
+      String spannerEndpoint, Boolean enableBuiltInMetrics, String healthCheckEndpoint) {
+    this(spannerEndpoint, enableBuiltInMetrics, healthCheckEndpoint, null);
   }
 
   public static GlobalClientConfigs fromMap(Map<String, Object> yamlMap) {
     String spannerEndpoint = (String) yamlMap.get("spannerEndpoint");
     Boolean enableBuiltInMetrics = (Boolean) yamlMap.get("enableBuiltInMetrics");
     String healthCheckEndpoint = (String) yamlMap.get("healthCheckEndpoint");
-    return new GlobalClientConfigs(spannerEndpoint, enableBuiltInMetrics, healthCheckEndpoint);
+    Boolean usePlainText = (Boolean) yamlMap.get("usePlainText");
+    return new GlobalClientConfigs(
+        spannerEndpoint, enableBuiltInMetrics, healthCheckEndpoint, usePlainText);
   }
 
   public String getSpannerEndpoint() {
@@ -48,5 +60,9 @@ public class GlobalClientConfigs {
 
   public String getHealthCheckEndpoint() {
     return healthCheckEndpoint;
+  }
+
+  public Boolean getUsePlainText() {
+    return usePlainText;
   }
 }

@@ -40,6 +40,7 @@ class AdapterOptions {
     private Credentials credentials;
     private BuiltInMetricsRecorder metricsRecorder;
     private boolean useVirtualThreads = false;
+    private boolean usePlainText = false;
 
     /** The Cloud Spanner endpoint. */
     Builder spannerEndpoint(String spannerEndpoint) {
@@ -106,6 +107,12 @@ class AdapterOptions {
       return this;
     }
 
+    /** (Optional) Whether to use a plaintext connection to Spanner. */
+    Builder usePlainText(boolean usePlainText) {
+      this.usePlainText = usePlainText;
+      return this;
+    }
+
     AdapterOptions build() {
       return new AdapterOptions(this);
     }
@@ -121,6 +128,7 @@ class AdapterOptions {
   private Credentials credentials;
   private BuiltInMetricsRecorder metricsRecorder;
   private boolean useVirtualThreads;
+  private boolean usePlainText;
 
   private AdapterOptions(Builder builder) {
     this.spannerEndpoint = builder.spannerEndpoint;
@@ -133,6 +141,7 @@ class AdapterOptions {
     this.credentials = builder.credentials;
     this.metricsRecorder = builder.metricsRecorder;
     this.useVirtualThreads = builder.useVirtualThreads;
+    this.usePlainText = builder.usePlainText;
   }
 
   static Builder newBuilder() {
@@ -177,5 +186,9 @@ class AdapterOptions {
 
   BuiltInMetricsRecorder getMetricsRecorder() {
     return metricsRecorder;
+  }
+
+  boolean usePlainText() {
+    return usePlainText;
   }
 }

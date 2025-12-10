@@ -224,7 +224,8 @@ public class Launcher {
             .databaseUri(config.getDatabaseUri())
             .inetAddress(config.getHostAddress())
             .numGrpcChannels(config.getNumGrpcChannels())
-            .metricsRecorder(metricsRecorder);
+            .metricsRecorder(metricsRecorder)
+            .usePlainText(config.usePlainText());
     if (config.getMaxCommitDelayMillis() != null) {
       opBuilder.maxCommitDelay(Duration.ofMillis(config.getMaxCommitDelayMillis()));
     }
