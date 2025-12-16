@@ -74,11 +74,7 @@ public final class AdapterClientWrapperTest {
     Map<String, String> stateUpdates = new HashMap<>();
     stateUpdates.put("k1", "v1");
     stateUpdates.put("k2", "v2");
-    AdaptMessageResponse mockResponse =
-        AdaptMessageResponse.newBuilder()
-            .setPayload(ByteString.copyFromUtf8("test response"))
-            .putAllStateUpdates(stateUpdates)
-            .build();
+    AdaptMessageResponse mockResponse = createAdaptMessageResponse("test response", stateUpdates);
     Iterator<AdaptMessageResponse> mockResponseIterator =
         Collections.singletonList(mockResponse).iterator();
     AdaptMessageRequest expectedRequest =
@@ -106,21 +102,13 @@ public final class AdapterClientWrapperTest {
     stateUpdates1.put("k1", "v1");
     stateUpdates1.put("k2", "v2");
     AdaptMessageResponse mockResponse1 =
-        AdaptMessageResponse.newBuilder()
-            .setPayload(ByteString.copyFromUtf8(" test response 1"))
-            .putAllStateUpdates(stateUpdates1)
-            .build();
+        createAdaptMessageResponse(" test response 1", stateUpdates1);
     Map<String, String> stateUpdates2 = new HashMap<>();
     stateUpdates2.put("k3", "v3");
     AdaptMessageResponse mockResponse2 =
-        AdaptMessageResponse.newBuilder()
-            .setPayload(ByteString.copyFromUtf8(" test response 2"))
-            .putAllStateUpdates(stateUpdates2)
-            .build();
+        createAdaptMessageResponse(" test response 2", stateUpdates2);
     AdaptMessageResponse mockResponse3 =
-        AdaptMessageResponse.newBuilder()
-            .setPayload(ByteString.copyFromUtf8("test header"))
-            .build();
+        createAdaptMessageResponse("test header", Collections.emptyMap());
     Iterator<AdaptMessageResponse> mockResponseIterator =
         Arrays.asList(mockResponse1, mockResponse2, mockResponse3).iterator();
     when(mockServerStream.iterator()).thenReturn(mockResponseIterator);
@@ -143,6 +131,42 @@ public final class AdapterClientWrapperTest {
   }
 
   @Test
+  public void sendGrpcRequest_MultipleResponsesWithLastBitSet() {
+    int streamId = 1;
+    byte[] payload = "test payload".getBytes();
+    Map<String, String> stateUpdates1 = new HashMap<>();
+    stateUpdates1.put("k1", "v1");
+    stateUpdates1.put("k2", "v2");
+    AdaptMessageResponse mockResponse1 =
+        createAdaptMessageResponse(" test response 1", stateUpdates1);
+    Map<String, String> stateUpdates2 = new HashMap<>();
+    stateUpdates2.put("k3", "v3");
+    AdaptMessageResponse mockResponse2 =
+        createAdaptMessageResponse(" test response 2", stateUpdates2);
+    AdaptMessageResponse mockResponse3 =
+        createAdaptMessageResponse("test header (last)", Collections.emptyMap(), true);
+    Iterator<AdaptMessageResponse> mockResponseIterator =
+        Arrays.asList(mockResponse1, mockResponse2, mockResponse3).iterator();
+    when(mockServerStream.iterator()).thenReturn(mockResponseIterator);
+    AdaptMessageRequest expectedRequest =
+        AdaptMessageRequest.newBuilder()
+            .setName("test-session")
+            .setProtocol("cassandra")
+            .setPayload(ByteString.copyFrom(payload))
+            .build();
+
+    ByteString response =
+        adapterClientWrapper.sendGrpcRequest(payload, new HashMap<>(), context, streamId);
+
+    verify(mockCallable).call(expectedRequest, context);
+    assertThat(response)
+        .isEqualTo(ByteString.copyFromUtf8("test header (last) test response 1 test response 2"));
+    assertThat(attachmentsCache.get("k1")).hasValue("v1");
+    assertThat(attachmentsCache.get("k2")).hasValue("v2");
+    assertThat(attachmentsCache.get("k3")).hasValue("v3");
+  }
+
+  @Test
   public void sendGrpcRequest_NoResponse() {
     int streamId = 1;
     byte[] payload = "test payload".getBytes();
@@ -156,8 +180,7 @@ public final class AdapterClientWrapperTest {
     when(mockServerStream.iterator()).thenReturn(mockResponseIterator);
     when(mockSession.getName()).thenReturn("test-session");
 
-    ByteString response =
-        adapterClientWrapper.sendGrpcRequest(payload, new HashMap<>(), context, streamId);
+    adapterClientWrapper.sendGrpcRequest(payload, new HashMap<>(), context, streamId);
 
     verify(mockCallable).call(expectedRequest, context);
   }
@@ -173,5 +196,19 @@ public final class AdapterClientWrapperTest {
         () ->
             adapterClientWrapper.sendGrpcRequest(
                 payload, new HashMap<>(), GrpcCallContext.createDefault(), streamId));
+  }
+
+  private static AdaptMessageResponse createAdaptMessageResponse(
+      String text, Map<String, String> stateUpdates, boolean isLast) {
+    return AdaptMessageResponse.newBuilder()
+        .setPayload(ByteString.copyFromUtf8(text))
+        .putAllStateUpdates(stateUpdates)
+        .setLast(isLast)
+        .build();
+  }
+
+  private static AdaptMessageResponse createAdaptMessageResponse(
+      String text, Map<String, String> stateUpdates) {
+    return createAdaptMessageResponse(text, stateUpdates, false);
   }
 }
