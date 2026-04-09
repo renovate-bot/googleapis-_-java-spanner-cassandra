@@ -23,6 +23,7 @@ import com.google.api.gax.rpc.TransportChannelProvider;
 import com.google.auth.Credentials;
 import com.google.cloud.spanner.adapter.metrics.BuiltInMetricsProvider;
 import com.google.cloud.spanner.adapter.metrics.BuiltInMetricsRecorder;
+import com.google.common.base.Strings;
 import com.google.spanner.adapter.v1.DatabaseName;
 import io.opentelemetry.api.OpenTelemetry;
 import java.net.InetAddress;
@@ -53,6 +54,7 @@ public final class SpannerCqlSessionBuilder
   private static final int LARGEST_MAX_COMMIT_DELAY_MILLIS = 500;
   private static final String DEFAULT_SPANNER_ENDPOINT = "spanner.googleapis.com:443";
   private static final String ENV_VAR_SPANNER_ENDPOINT = "SPANNER_ENDPOINT";
+  private static final String EXPERIMENTAL_HOST_ID = "default";
 
   private InetAddress iNetAddress;
   private int port;
@@ -66,6 +68,9 @@ public final class SpannerCqlSessionBuilder
   private Credentials credentials;
   private boolean useVirtualThreads;
   private boolean usePlainText;
+  private String experimentalHostEndpoint;
+  private String clientCertPath = null;
+  private String clientKeyPath = null;
 
   /**
    * Wraps the default CQL session with a SpannerCqlSession instance.
@@ -152,6 +157,23 @@ public final class SpannerCqlSessionBuilder
    */
   public SpannerCqlSessionBuilder setUsePlainText(boolean usePlainText) {
     this.usePlainText = usePlainText;
+    return this;
+  }
+
+  /** (Optional, default null) Experimental Host endpoint */
+  public SpannerCqlSessionBuilder setExperimentalHostEndpoint(String experimentalHostEndpoint) {
+    this.experimentalHostEndpoint = experimentalHostEndpoint;
+    return this;
+  }
+
+  /**
+   * (Optional, default null) Enables mTLS connection to experimental host endpoint using client
+   * certificate and key This should only be used for connecting to experimental host instances.
+   */
+  public SpannerCqlSessionBuilder setClientCertPathAndKey(
+      String clientCertPath, String clientKeyPath) {
+    this.clientCertPath = clientCertPath;
+    this.clientKeyPath = clientKeyPath;
     return this;
   }
 
@@ -257,6 +279,11 @@ public final class SpannerCqlSessionBuilder
 
   private void createAndStartAdapter() {
 
+    if (!Strings.isNullOrEmpty(experimentalHostEndpoint)
+        && !DatabaseName.isParsableFrom(databaseUri)) {
+      databaseUri =
+          DatabaseName.of(EXPERIMENTAL_HOST_ID, EXPERIMENTAL_HOST_ID, databaseUri).toString();
+    }
     DatabaseName databaseName = DatabaseName.parse(databaseUri);
     OpenTelemetry openTelemetry =
         enableBuiltInMetrics
@@ -281,6 +308,8 @@ public final class SpannerCqlSessionBuilder
             .metricsRecorder(metricsRecorder)
             .useVirtualThreads(useVirtualThreads)
             .usePlainText(usePlainText)
+            .setExperimentalHostEndpoint(experimentalHostEndpoint)
+            .useClientCert(clientCertPath, clientKeyPath)
             .build();
     adapter = new Adapter(adapterOptions);
     adapter.start();

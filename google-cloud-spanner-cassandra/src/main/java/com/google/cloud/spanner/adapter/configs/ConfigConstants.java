@@ -36,4 +36,7 @@ public final class ConfigConstants {
   public static final String HEALTH_CHECK_PORT_PROP_KEY = "healthCheckPort";
   public static final String CONFIG_FILE_PROP_KEY = "configFilePath";
   public static final String USE_PLAINTEXT_PROP_KEY = "usePlainText";
+  public static final String EXPERIMENTAL_HOST_ENDPOINT_PROP_KEY = "experimentalHostEndpoint";
+  public static final String CLIENT_CERT_PATH_PROP_KEY = "clientCertPath";
+  public static final String CLIENT_KEY_PATH_PROP_KEY = "clientKeyPath";
 }

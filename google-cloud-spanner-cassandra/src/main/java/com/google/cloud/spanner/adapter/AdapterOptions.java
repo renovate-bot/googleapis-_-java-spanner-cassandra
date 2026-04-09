@@ -18,6 +18,7 @@ package com.google.cloud.spanner.adapter;
 import com.google.api.gax.rpc.TransportChannelProvider;
 import com.google.auth.Credentials;
 import com.google.cloud.spanner.adapter.metrics.BuiltInMetricsRecorder;
+import com.google.common.base.Strings;
 import java.net.InetAddress;
 import java.time.Duration;
 import java.util.Optional;
@@ -41,9 +42,13 @@ class AdapterOptions {
     private BuiltInMetricsRecorder metricsRecorder;
     private boolean useVirtualThreads = false;
     private boolean usePlainText = false;
+    private String experimentalHostEndpoint = null;
+    private String clientCertPath = null;
+    private String clientKeyPath = null;
 
     /** The Cloud Spanner endpoint. */
     Builder spannerEndpoint(String spannerEndpoint) {
+      validateHostConflict(spannerEndpoint, this.experimentalHostEndpoint);
       this.spannerEndpoint = spannerEndpoint;
       return this;
     }
@@ -113,6 +118,30 @@ class AdapterOptions {
       return this;
     }
 
+    /** (Optional) Experimental host endpoint. */
+    Builder setExperimentalHostEndpoint(String experimentalHostEndpoint) {
+      validateHostConflict(this.spannerEndpoint, experimentalHostEndpoint);
+      this.experimentalHostEndpoint = experimentalHostEndpoint;
+      return this;
+    }
+
+    /** (Optional) Use mTLS connection to communicate with Experimental Host instance. */
+    Builder useClientCert(String clientCertPath, String clientKeyPath) {
+      this.clientCertPath = clientCertPath;
+      this.clientKeyPath = clientKeyPath;
+      return this;
+    }
+
+    private void validateHostConflict(
+        String spannerEndpointToCheck, String experimentalHostEndpointToCheck) {
+      if (!Strings.isNullOrEmpty(spannerEndpointToCheck)
+          && !spannerEndpointToCheck.equals(DEFAULT_SPANNER_ENDPOINT)
+          && !Strings.isNullOrEmpty(experimentalHostEndpointToCheck)) {
+        throw new IllegalArgumentException(
+            "Only one of Spanner Host or Experimental Host can be set.");
+      }
+    }
+
     AdapterOptions build() {
       return new AdapterOptions(this);
     }
@@ -129,6 +158,9 @@ class AdapterOptions {
   private BuiltInMetricsRecorder metricsRecorder;
   private boolean useVirtualThreads;
   private boolean usePlainText;
+  private String experimentalHostEndpoint;
+  private String clientCertPath;
+  private String clientKeyPath;
 
   private AdapterOptions(Builder builder) {
     this.spannerEndpoint = builder.spannerEndpoint;
@@ -142,6 +174,9 @@ class AdapterOptions {
     this.metricsRecorder = builder.metricsRecorder;
     this.useVirtualThreads = builder.useVirtualThreads;
     this.usePlainText = builder.usePlainText;
+    this.experimentalHostEndpoint = builder.experimentalHostEndpoint;
+    this.clientCertPath = builder.clientCertPath;
+    this.clientKeyPath = builder.clientKeyPath;
   }
 
   static Builder newBuilder() {
@@ -190,5 +225,21 @@ class AdapterOptions {
 
   boolean usePlainText() {
     return usePlainText;
+  }
+
+  String getExperimentalHostEndpoint() {
+    return experimentalHostEndpoint;
+  }
+
+  boolean useClientCert() {
+    return !Strings.isNullOrEmpty(clientCertPath) && !Strings.isNullOrEmpty(clientKeyPath);
+  }
+
+  String getClientCertPath() {
+    return clientCertPath;
+  }
+
+  String getClientKeyPath() {
+    return clientKeyPath;
   }
 }

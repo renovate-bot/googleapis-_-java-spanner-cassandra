@@ -18,6 +18,7 @@ package com.google.cloud.spanner.adapter;
 
 import com.google.cloud.spanner.adapter.metrics.BuiltInMetricsProvider;
 import com.google.cloud.spanner.adapter.metrics.BuiltInMetricsRecorder;
+import com.google.common.base.Strings;
 import com.google.spanner.adapter.v1.DatabaseName;
 import io.opentelemetry.api.OpenTelemetry;
 import java.io.IOException;
@@ -98,6 +99,8 @@ public class Launcher {
   private static final Logger LOG = LoggerFactory.getLogger(Launcher.class);
   private static final BuiltInMetricsProvider builtInMetricsProvider =
       BuiltInMetricsProvider.INSTANCE;
+
+  private static final String EXPERIMENTAL_HOST_ID = "default";
   private final AdapterFactory adapterFactory;
   private final List<Adapter> adapters = new ArrayList<>();
   private HealthCheckServer healthCheckServer;
@@ -165,7 +168,7 @@ public class Launcher {
         startAdapter(listenerConfig);
       } catch (Exception e) {
         String error = String.format("listener on port %d", listenerConfig.getPort());
-        LOG.error("Failed to start adapter for {}: {}", error, e.getMessage());
+        LOG.error("Failed to start adapter for {}: {}", error, e.getMessage(), e);
         failedListeners.add(error);
       }
     }
@@ -225,7 +228,9 @@ public class Launcher {
             .inetAddress(config.getHostAddress())
             .numGrpcChannels(config.getNumGrpcChannels())
             .metricsRecorder(metricsRecorder)
-            .usePlainText(config.usePlainText());
+            .usePlainText(config.usePlainText())
+            .setExperimentalHostEndpoint(config.getExperimentalHostEndpoint())
+            .useClientCert(config.getClientCertPath(), config.getClientKeyPath());
     if (config.getMaxCommitDelayMillis() != null) {
       opBuilder.maxCommitDelay(Duration.ofMillis(config.getMaxCommitDelayMillis()));
     }
@@ -243,6 +248,22 @@ public class Launcher {
         openTelemetry, builtInMetricsProvider.createDefaultAttributes(databaseName.getDatabase()));
   }
 
+  private DatabaseName resolveDatabaseName(ListenerConfig config) {
+    String uriOrId = config.getDatabaseUri();
+
+    if (DatabaseName.isParsableFrom(uriOrId)) {
+      return DatabaseName.parse(uriOrId);
+    }
+
+    if (!Strings.isNullOrEmpty(config.getExperimentalHostEndpoint())) {
+      return DatabaseName.of(EXPERIMENTAL_HOST_ID, EXPERIMENTAL_HOST_ID, uriOrId);
+    }
+
+    // User is trying to connect to Cloud Spanner instance with an invalid database URI. We
+    // intentionally call parse() here, so it throws the standard Spanner IllegalArgumentException.
+    return DatabaseName.parse(uriOrId);
+  }
+
   private void startAdapter(ListenerConfig config) throws IOException {
     LOG.info(
         "Starting Adapter for Spanner database {} on {}:{} with {} gRPC channels, max commit"
@@ -254,7 +275,7 @@ public class Launcher {
         config.getMaxCommitDelayMillis(),
         config.isEnableBuiltInMetrics());
 
-    final DatabaseName databaseName = DatabaseName.parse(config.getDatabaseUri());
+    final DatabaseName databaseName = resolveDatabaseName(config);
     final BuiltInMetricsRecorder metricsRecorder =
         createMetricsRecorder(config.isEnableBuiltInMetrics(), databaseName);
     final AdapterOptions options = buildAdapterOptions(config, metricsRecorder);

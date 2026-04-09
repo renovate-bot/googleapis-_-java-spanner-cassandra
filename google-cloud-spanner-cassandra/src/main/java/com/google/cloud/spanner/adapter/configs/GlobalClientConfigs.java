@@ -16,6 +16,7 @@ limitations under the License.
 
 package com.google.cloud.spanner.adapter.configs;
 
+import com.google.common.base.Strings;
 import java.util.Map;
 
 /** Represents the global client configurations loaded from a YAML file. */
@@ -24,21 +25,55 @@ public class GlobalClientConfigs {
   private final Boolean enableBuiltInMetrics;
   private final String healthCheckEndpoint;
   private final Boolean usePlainText;
+  private final String experimentalHostEndpoint;
+  private final String clientCertPath;
+  private final String clientKeyPath;
+
+  public GlobalClientConfigs(
+      String spannerEndpoint,
+      Boolean enableBuiltInMetrics,
+      String healthCheckEndpoint,
+      Boolean usePlainText,
+      String experimentalHostEndpoint,
+      String clientCertPath,
+      String clientKeyPath) {
+    this.spannerEndpoint = spannerEndpoint;
+    this.enableBuiltInMetrics = enableBuiltInMetrics;
+    this.healthCheckEndpoint = healthCheckEndpoint;
+    this.usePlainText = usePlainText;
+    this.experimentalHostEndpoint = experimentalHostEndpoint;
+    this.clientCertPath = clientCertPath;
+    this.clientKeyPath = clientKeyPath;
+  }
+
+  public GlobalClientConfigs(
+      String spannerEndpoint, Boolean enableBuiltInMetrics, String healthCheckEndpoint) {
+    this(spannerEndpoint, enableBuiltInMetrics, healthCheckEndpoint, null, null, null, null);
+  }
 
   public GlobalClientConfigs(
       String spannerEndpoint,
       Boolean enableBuiltInMetrics,
       String healthCheckEndpoint,
       Boolean usePlainText) {
-    this.spannerEndpoint = spannerEndpoint;
-    this.enableBuiltInMetrics = enableBuiltInMetrics;
-    this.healthCheckEndpoint = healthCheckEndpoint;
-    this.usePlainText = usePlainText;
+    this(
+        spannerEndpoint, enableBuiltInMetrics, healthCheckEndpoint, usePlainText, null, null, null);
   }
 
   public GlobalClientConfigs(
-      String spannerEndpoint, Boolean enableBuiltInMetrics, String healthCheckEndpoint) {
-    this(spannerEndpoint, enableBuiltInMetrics, healthCheckEndpoint, null);
+      String spannerEndpoint,
+      Boolean enableBuiltInMetrics,
+      String healthCheckEndpoint,
+      Boolean usePlainText,
+      String experimentalHostEndpoint) {
+    this(
+        spannerEndpoint,
+        enableBuiltInMetrics,
+        healthCheckEndpoint,
+        usePlainText,
+        experimentalHostEndpoint,
+        null,
+        null);
   }
 
   public static GlobalClientConfigs fromMap(Map<String, Object> yamlMap) {
@@ -46,8 +81,25 @@ public class GlobalClientConfigs {
     Boolean enableBuiltInMetrics = (Boolean) yamlMap.get("enableBuiltInMetrics");
     String healthCheckEndpoint = (String) yamlMap.get("healthCheckEndpoint");
     Boolean usePlainText = (Boolean) yamlMap.get("usePlainText");
+    String experimentalHostEndpoint = (String) yamlMap.get("experimentalHostEndpoint");
+    String clientCertPath = (String) yamlMap.get("clientCertPath");
+    String clientKeyPath = (String) yamlMap.get("clientKeyPath");
+    if (Strings.isNullOrEmpty(clientCertPath) || Strings.isNullOrEmpty(clientKeyPath)) {
+      return new GlobalClientConfigs(
+          spannerEndpoint,
+          enableBuiltInMetrics,
+          healthCheckEndpoint,
+          usePlainText,
+          experimentalHostEndpoint);
+    }
     return new GlobalClientConfigs(
-        spannerEndpoint, enableBuiltInMetrics, healthCheckEndpoint, usePlainText);
+        spannerEndpoint,
+        enableBuiltInMetrics,
+        healthCheckEndpoint,
+        usePlainText,
+        experimentalHostEndpoint,
+        clientCertPath,
+        clientKeyPath);
   }
 
   public String getSpannerEndpoint() {
@@ -64,5 +116,17 @@ public class GlobalClientConfigs {
 
   public Boolean getUsePlainText() {
     return usePlainText;
+  }
+
+  public String getExperimentalHostEndpoint() {
+    return experimentalHostEndpoint;
+  }
+
+  public String getClientCertPath() {
+    return clientCertPath;
+  }
+
+  public String getClientKeyPath() {
+    return clientKeyPath;
   }
 }

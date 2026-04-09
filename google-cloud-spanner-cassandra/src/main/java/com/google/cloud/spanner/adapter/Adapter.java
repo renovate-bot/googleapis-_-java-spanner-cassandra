@@ -29,10 +29,15 @@ import com.google.auth.Credentials;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.NoCredentials;
 import com.google.common.base.MoreObjects;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
 import com.google.spanner.adapter.v1.AdapterClient;
 import com.google.spanner.adapter.v1.AdapterSettings;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
+import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -90,12 +95,12 @@ final class Adapter {
 
     try {
       Credentials credentials = options.getCredentials();
-      if (credentials == null) {
+      if (options.usePlainText() || !Strings.isNullOrEmpty(options.getExperimentalHostEndpoint())) {
+        credentials = null;
+      } else if (credentials == null) {
         credentials = GoogleCredentials.getApplicationDefault();
       }
-      if (options.usePlainText()) {
-        credentials = null;
-      }
+
       final CredentialsProvider credentialsProvider = setUpCredentialsProvider(credentials);
 
       InstantiatingGrpcChannelProvider.Builder channelProviderBuilder =
@@ -109,6 +114,24 @@ final class Adapter {
       if (options.usePlainText()) {
         LOG.warn("Using plain text channel. This should not be used in production.");
         channelProviderBuilder.setChannelConfigurator(ManagedChannelBuilder::usePlaintext);
+      } else if (!Strings.isNullOrEmpty(options.getExperimentalHostEndpoint())
+          && options.useClientCert()) {
+        SslContext mTLSContext =
+            GrpcSslContexts.forClient()
+                .keyManager(
+                    new File(options.getClientCertPath()), new File(options.getClientKeyPath()))
+                .build();
+        channelProviderBuilder.setChannelConfigurator(
+            channelBuilder -> {
+              if (channelBuilder instanceof NettyChannelBuilder) {
+                ((NettyChannelBuilder) channelBuilder).sslContext(mTLSContext);
+              } else {
+                throw new IllegalStateException(
+                    "mTLS requires NettyChannelBuilder, but got "
+                        + channelBuilder.getClass().getName());
+              }
+              return channelBuilder;
+            });
       }
 
       channelProviderBuilder
@@ -130,15 +153,20 @@ final class Adapter {
               options.getDatabaseUri(),
               USER_AGENT_KEY,
               DEFAULT_USER_AGENT);
-      AdapterSettings settings =
+      AdapterSettings.Builder settingsBuilder =
           AdapterSettings.newBuilder()
-              .setEndpoint(options.getSpannerEndpoint())
               .setTransportChannelProvider(
                   MoreObjects.firstNonNull(
                       options.getChannelProvider(), channelProviderBuilder.build()))
               .setCredentialsProvider(credentialsProvider)
-              .setHeaderProvider(headerProvider)
-              .build();
+              .setHeaderProvider(headerProvider);
+      if (!Strings.isNullOrEmpty(options.getExperimentalHostEndpoint())) {
+        settingsBuilder.setEndpoint(options.getExperimentalHostEndpoint());
+      } else {
+        settingsBuilder.setEndpoint(options.getSpannerEndpoint());
+      }
+
+      AdapterSettings settings = settingsBuilder.build();
 
       adapterClient = AdapterClient.create(settings);
 
